@@ -6,27 +6,33 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "node:crypto";
-import { TOOL_DEFINITIONS } from "./tools.js";
+import { TOOL_DEFINITIONS, BRIDGE_TOOL_DEFINITIONS } from "./tools.js";
 
 const HUB_PORT = Number(process.env.RBX_MCP_HUB_PORT) || 44755;
 const HUB_HOST = process.env.RBX_MCP_HUB_HOST || "127.0.0.1";
-const PLACE_ID = process.env.RBX_PLACE_ID || "";
-const PLACE_NAME = process.env.RBX_PLACE_NAME || "";
+const ENV_PLACE_ID = process.env.RBX_PLACE_ID || "";
+const ALLOW_REBIND = /^(1|true|yes)$/i.test(process.env.RBX_ALLOW_REBIND || "");
+// A bridge started with a fixed RBX_PLACE_ID stays welded to it (the original
+// no-wrong-Studio guarantee) unless RBX_ALLOW_REBIND opts in to bind_place.
+const WELDED = Boolean(ENV_PLACE_ID) && !ALLOW_REBIND;
+
+let boundPlaceId = ENV_PLACE_ID;
+let boundPlaceName = process.env.RBX_PLACE_NAME || "";
 
 function log(...args) {
   process.stderr.write(`[bridge] ${args.join(" ")}\n`);
 }
 
-if (!PLACE_ID) {
-  log("warning: RBX_PLACE_ID is empty. Tool calls will fail until set.");
-  log("run `rbx-mcp-hub init` inside your project to configure .mcp.json");
+if (!boundPlaceId) {
+  log("warning: no place bound yet. Studio tools will fail until one is.");
+  log("bind at runtime with the `bind_place` tool, or run `rbx-mcp-hub init` to fix a PlaceId in .mcp.json");
 }
 
 async function forwardToHub(tool, args) {
   const id = randomUUID();
   const body = JSON.stringify({
     id,
-    context: PLACE_ID,
+    context: boundPlaceId,
     tool,
     params: args ?? {},
   });
@@ -70,23 +76,92 @@ const server = new Server(
   },
 );
 
+async function fetchHubStatus() {
+  const res = await fetch(`http://${HUB_HOST}:${HUB_PORT}/status`).catch((e) => {
+    throw new Error(
+      `hub unreachable at ${HUB_HOST}:${HUB_PORT} (${e.message}). ` +
+      `Start it with: rbx-mcp-hub start`,
+    );
+  });
+  return res.json();
+}
+
+function textResult(text, isError = false) {
+  return { ...(isError ? { isError: true } : {}), content: [{ type: "text", text }] };
+}
+
+async function handleListPlaces() {
+  const status = await fetchHubStatus();
+  const places = (status.plugins ?? []).map((p) => ({
+    placeId: p.context,
+    name: p.name,
+    connected: p.connected,
+    lastSeenSecondsAgo: Math.round((p.lastSeenMs ?? 0) / 1000),
+  }));
+  return textResult(JSON.stringify({ boundPlaceId: boundPlaceId || null, places }, null, 2));
+}
+
+async function handleBindPlace(args) {
+  const placeId = String(args?.placeId ?? "").trim();
+  if (!/^\d+$/.test(placeId)) {
+    return textResult(
+      `bind_place: placeId must be a positive integer (got "${placeId}"). ` +
+      "Find it via list_places, or `print(game.PlaceId)` in Studio.",
+      true,
+    );
+  }
+  if (WELDED) {
+    return textResult(
+      `bind_place refused: this bridge is welded to RBX_PLACE_ID=${ENV_PLACE_ID} by its .mcp.json. ` +
+      "Set RBX_ALLOW_REBIND=1 in the same env block to allow runtime re-binding.",
+      true,
+    );
+  }
+  let note = "";
+  try {
+    const status = await fetchHubStatus();
+    const match = (status.plugins ?? []).find((p) => p.context === placeId);
+    if (!match) {
+      note = " Warning: no Studio plugin is currently connected for that PlaceId — calls will fail until that place is open in Studio.";
+    } else if (!match.connected) {
+      note = " Warning: the plugin for that PlaceId looks stale — check the Studio window.";
+    } else if (match.name) {
+      note = ` Connected Studio reports name "${match.name}".`;
+    }
+  } catch {
+    note = " Warning: hub unreachable, binding stored anyway.";
+  }
+  boundPlaceId = placeId;
+  boundPlaceName = "";
+  log(`bound to place ${placeId}`);
+  return textResult(`Bound to PlaceId ${placeId}. All Studio tools now route there.${note}`);
+}
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOL_DEFINITIONS,
+  tools: [...TOOL_DEFINITIONS, ...BRIDGE_TOOL_DEFINITIONS],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
 
-  if (!PLACE_ID) {
+  try {
+    if (name === "list_places") return await handleListPlaces();
+    if (name === "bind_place") return await handleBindPlace(args);
+  } catch (e) {
+    return textResult(e.message || String(e), true);
+  }
+
+  if (!boundPlaceId) {
     return {
       isError: true,
       content: [
         {
           type: "text",
           text:
-            "RBX_PLACE_ID is not set for this MCP bridge. " +
-            "Run `rbx-mcp-hub init` in the project directory " +
-            "or set `env.RBX_PLACE_ID` in its .mcp.json.",
+            "No place is bound for this MCP bridge. " +
+            "Call `bind_place` with the target PlaceId (see `list_places`), " +
+            "or run `rbx-mcp-hub init` in the project directory " +
+            "to set `env.RBX_PLACE_ID` in its .mcp.json.",
         },
       ],
     };
@@ -111,4 +186,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-log(`bridge running (place=${PLACE_ID || "unset"} name=${PLACE_NAME || "-"})`);
+log(
+  `bridge running (place=${boundPlaceId || "unbound"} name=${boundPlaceName || "-"}` +
+  `${WELDED ? " welded" : " rebindable"})`,
+);

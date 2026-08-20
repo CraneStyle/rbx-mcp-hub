@@ -1,3 +1,29 @@
+// Tools handled by the bridge itself — never forwarded to a Studio plugin.
+export const BRIDGE_TOOL_DEFINITIONS = [
+  {
+    name: "list_places",
+    description:
+      "List the Roblox Studio sessions currently connected to the hub, with each one's PlaceId, reported place name, and connection freshness. Use this to discover what bind_place can target.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "bind_place",
+    description:
+      "Bind (or re-bind) this MCP session to a Studio session by PlaceId. All subsequent Studio tools route to that place. Refused when the bridge was started with a fixed RBX_PLACE_ID unless RBX_ALLOW_REBIND=1 is also set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        placeId: {
+          type: ["string", "number"],
+          description:
+            "PlaceId of the target Studio session (find it via list_places, or `print(game.PlaceId)` in Studio).",
+        },
+      },
+      required: ["placeId"],
+    },
+  },
+];
+
 export const TOOL_DEFINITIONS = [
   {
     name: "run_code",

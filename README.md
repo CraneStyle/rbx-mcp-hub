@@ -163,6 +163,39 @@ The command writes a `.mcp.json` that points at the bridge and sets
 `RBX_PLACE_ID`. Open the place in Studio, then open Claude Code in the
 project folder — Claude will prompt to authorize the MCP server; accept.
 
+## Dynamic binding (bind at runtime instead of init)
+
+If you'd rather not fix a PlaceId per folder, register the bridge with
+**no** `RBX_PLACE_ID` (for example once at user scope) and bind from
+inside the session:
+
+```json
+{
+  "mcpServers": {
+    "rbx-mcp-hub": {
+      "command": "node",
+      "args": ["<path>/rbx-mcp-hub/src/bridge.js"]
+    }
+  }
+}
+```
+
+The bridge then exposes two extra tools:
+
+- `list_places` — shows every Studio currently connected to the hub
+  (PlaceId, reported name, freshness) plus the session's current binding.
+- `bind_place` — points this session at a PlaceId; all Studio tools
+  route there from then on. Re-binding mid-session is allowed.
+
+Just tell your agent "bind to place 1234" (or "look at list_places and
+bind to the right game") — no `.mcp.json` edits, no restarts.
+
+Safety: a bridge started **with** `RBX_PLACE_ID` stays welded to it —
+`bind_place` is refused — so existing per-project setups keep their
+can't-hit-the-wrong-Studio guarantee. Opt a welded bridge into runtime
+re-binding by also setting `RBX_ALLOW_REBIND=1` in its env block.
+An unbound bridge refuses Studio tools until `bind_place` is called.
+
 ## Verify it's working
 
 1. In each Studio window, look at the Output tab. You should see:
