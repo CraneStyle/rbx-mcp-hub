@@ -165,9 +165,15 @@ project folder — Claude will prompt to authorize the MCP server; accept.
 
 ## Dynamic binding (bind at runtime instead of init)
 
-If you'd rather not fix a PlaceId per folder, register the bridge with
-**no** `RBX_PLACE_ID` (for example once at user scope) and bind from
-inside the session:
+If you'd rather not fix a PlaceId per folder, run:
+
+```bash
+rbx-mcp-hub init --dynamic
+```
+
+It writes the `.mcp.json` with **no** `RBX_PLACE_ID` and asks no
+questions. (Registering the bridge env-less anywhere else — e.g. once at
+user scope — works the same way:)
 
 ```json
 {

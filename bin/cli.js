@@ -37,6 +37,9 @@ Usage:
 Commands:
   init                 Write a per-project .mcp.json in the current directory.
                        Prompts for this project's Roblox PlaceId.
+  init --dynamic       Same, but with NO fixed PlaceId and no prompts: the
+                       agent binds at runtime with the bind_place tool
+                       (discover targets via list_places).
   start                Start the hub daemon in the background.
   stop                 Stop the running hub daemon.
   status               Show which Studio plugins are currently connected.
@@ -50,7 +53,8 @@ Env vars:
 `);
 }
 
-async function cmdInit() {
+async function cmdInit(flags) {
+  const dynamic = flags.includes("--dynamic");
   const cwd = process.cwd();
   const target = path.join(cwd, ".mcp.json");
   let existing = {};
@@ -61,31 +65,43 @@ async function cmdInit() {
       console.error(`warning: existing ${target} is not valid JSON; overwriting`);
     }
   }
-  const placeId = await ask(
-    "Roblox PlaceId for this project (find via `print(game.PlaceId)` in Studio, or the /games/<id> URL segment): ",
-  );
-  if (!placeId || !/^\d+$/.test(placeId)) {
-    console.error("error: PlaceId must be a positive integer.");
-    process.exit(1);
+
+  let env;
+  if (dynamic) {
+    env = undefined;
+  } else {
+    const placeId = await ask(
+      "Roblox PlaceId for this project (find via `print(game.PlaceId)` in Studio, or the /games/<id> URL segment): ",
+    );
+    if (!placeId || !/^\d+$/.test(placeId)) {
+      console.error("error: PlaceId must be a positive integer.");
+      process.exit(1);
+    }
+    const placeName = await ask("Optional short name (e.g. 'chess'); blank to skip: ");
+    env = {
+      RBX_PLACE_ID: placeId,
+      ...(placeName ? { RBX_PLACE_NAME: placeName } : {}),
+    };
   }
-  const placeName = await ask("Optional short name (e.g. 'chess'); blank to skip: ");
 
   const bridgeBin = path.resolve(ROOT, "src", "bridge.js");
-  const bridgeCmd = process.platform === "win32" ? "node" : "node";
-  const bridgeArgs = [bridgeBin];
 
   existing.mcpServers = existing.mcpServers || {};
   existing.mcpServers["rbx-mcp-hub"] = {
-    command: bridgeCmd,
-    args: bridgeArgs,
-    env: {
-      RBX_PLACE_ID: placeId,
-      ...(placeName ? { RBX_PLACE_NAME: placeName } : {}),
-    },
+    command: "node",
+    args: [bridgeBin],
+    ...(env ? { env } : {}),
   };
   fs.writeFileSync(target, JSON.stringify(existing, null, 2) + "\n");
-  console.log(`wrote ${target}`);
-  console.log("next: run `rbx-mcp-hub start` (once, globally) and open this place in Studio.");
+  console.log(`wrote ${target}${dynamic ? " (dynamic: no fixed PlaceId)" : ""}`);
+  if (dynamic) {
+    console.log(
+      "next: run `rbx-mcp-hub start` (once, globally). Sessions here start unbound —\n" +
+      "tell the agent to call list_places, then bind_place with the target PlaceId.",
+    );
+  } else {
+    console.log("next: run `rbx-mcp-hub start` (once, globally) and open this place in Studio.");
+  }
 }
 
 function readPid() {
@@ -211,9 +227,10 @@ async function cmdInstallPlugin() {
 }
 
 const cmd = process.argv[2];
+const flags = process.argv.slice(3);
 switch (cmd) {
   case "init":
-    await cmdInit();
+    await cmdInit(flags);
     break;
   case "start":
     await cmdStart();
